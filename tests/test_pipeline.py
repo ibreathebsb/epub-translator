@@ -85,6 +85,27 @@ def test_table_of_contents_uses_the_wording_of_the_headings(epub):
     assert "<text>译：The Stormy Night</text>" in read(out, "OEBPS/toc.ncx")
 
 
+def test_half_translated_heading_does_not_win(tmp_path):
+    """The heading keeps an English word; a sound wording from elsewhere is used instead."""
+    chapters = {
+        "a.xhtml": ("Contents", "<p>The Long Road Home</p>"),
+        "b.xhtml": ("The Long Road Home", "<h1>The Long Road Home</h1><p>Some words of the story here.</p>"),
+    }
+    src = build_epub(tmp_path / "book.epub", chapters)
+
+    def script(document, wanted, number):
+        listing = "Contents" in document.values()
+        good, bad = "漫漫回家路", "漫长的Road回家"
+        return answer({
+            i: (good if listing else bad) if document[i] == "The Long Road Home" else mark(document[i])
+            for i in wanted
+        })
+
+    _, out, _ = run(src, FakeProvider(script))
+    assert "<h1>漫漫回家路</h1>" in read(out, "OEBPS/b.xhtml")
+    assert '<a href="b.xhtml">漫漫回家路</a>' in read(out, "OEBPS/nav.xhtml")
+
+
 def test_second_run_sends_nothing(epub):
     _, out, _ = run(epub)
     first = out.read_bytes()

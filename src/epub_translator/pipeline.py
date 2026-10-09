@@ -17,7 +17,7 @@ from .epub import Book, EpubError, ManifestItem, serialize_xml
 from .extract import Document, ParseError, Segment
 from .providers.base import Provider, ProviderError
 from .store import Store
-from .translate import DocResult, Issue, Translator
+from .translate import DocResult, Issue, Translator, looks_untranslated
 from .writeback import Ncx, apply, serialize_document, title_segments
 
 Emit = Callable[..., None]
@@ -109,7 +109,7 @@ def translate_book(
                 raise
 
             replacements: dict[str, bytes] = {}
-            memory = _harmonize(jobs)
+            memory = _harmonize(jobs, target)
             for job in jobs:
                 done = job.result.translations
                 if not done:
@@ -264,12 +264,13 @@ def _parallel(
         yield outcome
 
 
-def _harmonize(jobs: list[_Job]) -> dict[str, str]:
+def _harmonize(jobs: list[_Job], target: str) -> dict[str, str]:
     """Pick one translation for every distinct source text in the book.
 
     Documents are translated independently, so the same title can come back
     worded differently in an article, on a section page and in the table of
-    contents. The wording used where the text is a heading wins.
+    contents. The wording used where the text is a heading wins, unless it is
+    broken or was left untranslated there.
     """
     rank = {"heading": 0, "title": 1, "text": 2, "attr": 3}
     candidates = []
@@ -277,7 +278,7 @@ def _harmonize(jobs: list[_Job]) -> dict[str, str]:
         for seg in job.doc.segments:
             text = job.result.translations.get(seg.id)
             if text is not None:
-                broken = bool(seg.check(text))
+                broken = bool(seg.check(text)) or looks_untranslated(seg.source, text, target)
                 candidates.append((broken, rank[seg.kind], order, seg.id, seg.source, text))
     memory: dict[str, str] = {}
     for *_, source, text in sorted(candidates, key=lambda c: c[:4]):

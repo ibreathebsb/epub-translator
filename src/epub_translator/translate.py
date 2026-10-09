@@ -25,7 +25,8 @@ MAX_ATTEMPTS = 3  # the first request plus two retries
 MAX_TRIES = 6  # per request, for transient failures
 _CJK = re.compile(r"[぀-ヿ㐀-䶿一-鿿가-힯]")
 _LATIN = re.compile(r"[A-Za-z]")
-_LOWER_WORD = re.compile(r"\b[a-z]{2,}\b")
+# Not \b: there is no word boundary between a CJK character and a Latin letter.
+_LOWER_WORD = re.compile(r"(?<![A-Za-z])[a-z]{2,}(?![A-Za-z])")
 _FENCE = re.compile(r"\A\s*```[A-Za-z]*[ \t]*\n?|\n?```\s*\Z")
 _ITEM = re.compile(r'\{\s*"id"\s*:\s*"?(\d+)"?\s*,\s*"text"\s*:\s*(?=")')
 
@@ -107,6 +108,13 @@ def looks_untranslated(source: str, text: str, target: str) -> bool:
     """True when a sizeable piece of prose came back in the source language."""
     plain = _URL.sub(" ", _TOKEN.sub(" ", source))
     if target.lower().split("-")[0] in ("zh", "ja", "ko"):
+        # A short label that came back half translated: "The world this week"
+        # as "本周world". Longer text may rightly keep a foreign word.
+        if not _TOKEN.search(source) and len(plain.split()) <= 10 and _CJK.search(text):
+            words = {w for w in _LOWER_WORD.findall(plain.lower()) if len(w) >= 4}
+            kept = words & set(_LOWER_WORD.findall(text.lower()))
+            if kept and kept != words:  # some words translated, some not
+                return True
         # Latin prose in, not one CJK character out. Names and titles alone do
         # not count: they are often rightly kept as they are.
         return (
@@ -190,7 +198,7 @@ class Translator:
                     answers[seg.id] = wrong[seg.id] = text
                     faults[seg.id] = errors[0]
                 elif looks_untranslated(seg.source, text, self.target):
-                    problems[seg.id] = ["it was returned untranslated; translate it"]
+                    problems[seg.id] = ["it was returned untranslated or only partly translated"]
                     echoes[seg.id] = text
                 else:
                     done[seg.id] = text

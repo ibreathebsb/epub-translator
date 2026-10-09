@@ -73,6 +73,9 @@ def test_looks_untranslated():
     assert not looks_untranslated("这一段本来就是中文，不需要再翻译了。", "这一段本来就是中文，不需要再翻译了。", "zh-CN")
     names = "Rheinmetall, Krauss-Maffei Wegmann and Thyssenkrupp Marine Systems"
     assert not looks_untranslated(names, names, "zh-CN")  # names may rightly stay as they are
+    assert looks_untranslated("The world this week", "本周world", "zh-CN")  # half translated
+    assert not looks_untranslated("The world this week", "一周要闻", "zh-CN")
+    assert not looks_untranslated("Buy an iPhone on eBay", "在eBay上买iPhone", "zh-CN")
     assert looks_untranslated(prose, prose, "fr")
     assert not looks_untranslated(prose, "Le matin est venu lentement.", "fr")
 

@@ -28,7 +28,7 @@ console = Console(highlight=False)
 REASONS = {
     "truncated": "输出被截断",
     "missing": "有段落没有返回",
-    "invalid": "有段落的占位符不对",
+    "invalid": "有段落没有译好",
 }
 
 

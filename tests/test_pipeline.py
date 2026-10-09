@@ -106,6 +106,50 @@ def test_half_translated_heading_does_not_win(tmp_path):
     assert '<a href="b.xhtml">漫漫回家路</a>' in read(out, "OEBPS/nav.xhtml")
 
 
+def test_drop_classes(tmp_path):
+    chapters = {
+        "cover.xhtml": ("", '<p><img src="cover.png"/></p><p class="mark">12345</p>'),
+        "a.xhtml": ("One", '<p>Some words of the story here.</p><p class="mark">Downloaded by a site</p>'),
+    }
+    src = build_epub(tmp_path / "book.epub", chapters)
+    report, out, provider = run(src, drop_classes=frozenset({"mark"}))
+    assert report.ok
+    assert 'class="mark"' not in read(out, "OEBPS/a.xhtml")
+    assert 'class="mark"' not in read(out, "OEBPS/cover.xhtml")  # nothing to translate there
+    assert "Downloaded" not in "".join(user for _, user in provider.calls)
+    assert checks.problems(out) == []
+
+
+def test_drop_documents(tmp_path):
+    chapters = {
+        "ad.xhtml": ("Ad", '<p>Buy this now <img src="ad.png"/><img src="cover.png"/></p>'),
+        **CHAPTERS,
+    }
+    src = build_epub(tmp_path / "book.epub", chapters, extra={"OEBPS/ad.png": b"png"})
+    with zipfile.ZipFile(src) as z:
+        data = {name: z.read(name) for name in z.namelist()}
+    data["OEBPS/content.opf"] = data["OEBPS/content.opf"].replace(
+        b"</manifest>", b'<item id="adimg" href="ad.png" media-type="image/png"/>\n  </manifest>'
+    )
+    with zipfile.ZipFile(src, "w") as z:
+        z.writestr(zipfile.ZipInfo("mimetype"), data.pop("mimetype"))
+        for name, content in data.items():
+            z.writestr(name, content)
+
+    report, out, provider = run(src, drop_documents=frozenset({"ad.xhtml"}))
+    assert report.ok and checks.problems(out) == []
+    with zipfile.ZipFile(out) as z:
+        names = set(z.namelist())
+    assert "OEBPS/ad.xhtml" not in names and "OEBPS/ad.png" not in names
+    assert "OEBPS/cover.png" in names  # chapter one still uses it
+    opf = read(out, "OEBPS/content.opf")
+    assert "ad.xhtml" not in opf and "ad.png" not in opf and 'idref="d0"' not in opf
+    assert checks.spine(out) == ["OEBPS/ch1.xhtml", "OEBPS/ch2.xhtml", "OEBPS/notes.xhtml"]
+    assert "Buy this" not in "".join(user for _, user in provider.calls)
+    with pytest.raises(EpubError, match="nope.xhtml"):
+        run(src, drop_documents=frozenset({"nope.xhtml"}))
+
+
 def test_second_run_sends_nothing(epub):
     _, out, _ = run(epub)
     first = out.read_bytes()

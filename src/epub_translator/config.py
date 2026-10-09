@@ -42,6 +42,8 @@ class Settings:
     temperature: float | None = None
     timeout: float | None = None
     extra: dict = field(default_factory=dict)
+    drop_classes: frozenset[str] = frozenset()  # elements to remove from every book
+    drop_docs: frozenset[str] = frozenset()  # documents to remove when a book has them
     source: Path | None = None  # the file the settings came from, if any
 
 
@@ -82,6 +84,11 @@ def _number(values: dict[str, str], name: str, kind: type):
         return kind(raw)
     except ValueError:
         raise ConfigError(f"{PREFIX}{name} 应该是数字，现在是 {raw!r}") from None
+
+
+def _names(values: dict[str, str], name: str) -> frozenset[str]:
+    """A comma-separated list."""
+    return frozenset(part.strip() for part in values.get(PREFIX + name, "").split(",") if part.strip())
 
 
 def load_settings(
@@ -127,6 +134,8 @@ def load_settings(
         temperature=_number(values, "TEMPERATURE", float),
         timeout=_number(values, "TIMEOUT", float),
         extra=extra,
+        drop_classes=_names(values, "DROP_CLASS"),
+        drop_docs=_names(values, "DROP_DOC"),
         source=source,
     )
 

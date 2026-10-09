@@ -94,6 +94,16 @@ def test_title_of_an_empty_element_is_not_text():
     assert sources(doc) == ["Some words<x1/> on a page"]
 
 
+def test_drop_classes_removes_elements_and_keeps_the_text_after_them():
+    data = page("T", '<p>Body text</p><p class="x footer">Downloaded by <a href="u">someone</a></p> tail'
+                     '<div>Keep <span class="footer">drop</span> this</div>')
+    doc = Document(data, frozenset({"footer"}))
+    assert doc.dropped == 2
+    assert sources(doc) == ["Body text", "tail", "Keep this"]
+    assert body_of(doc) == "<p>Body text</p> tail<div>Keep  this</div>"
+    assert Document(data).dropped == 0
+
+
 # -- what is left alone ------------------------------------------------------
 
 

@@ -36,6 +36,21 @@ _DECLARATION = re.compile(rb"(?:\xef\xbb\xbf)?\s*<\?xml\s[^>]*\?>")
 _STANDALONE = re.compile(rb"""standalone\s*=\s*["'](yes|no)["']""")
 
 
+# href="..." and src="..." in markup, url(...) in style sheets
+_REFERENCE = re.compile(r"""(?:href|src)\s*=\s*["']([^"']+)["']|url\(\s*["']?([^"')]+)""")
+
+
+def _remove(el: etree._Element) -> None:
+    """Remove an element together with the whitespace that followed it."""
+    parent = el.getparent()
+    before = el.getprevious()
+    if before is not None:
+        before.tail = el.tail
+    else:
+        parent.text = el.tail
+    parent.remove(el)
+
+
 class EpubError(Exception):
     """The file is not an EPUB we can work with."""
 
@@ -98,6 +113,7 @@ class Book:
             raise EpubError(f"OPF 文件无法解析：{exc}") from exc
         self.manifest = self._read_manifest()
         self.spine = self._read_spine()
+        self.removed: set[str] = set()  # members left out when the book is written
         self.nav = next((i for i in self.manifest.values() if "nav" in i.properties), None)
         self.ncx = self._find_ncx()
 
@@ -198,6 +214,66 @@ class Book:
         if langs:
             langs[0].text = lang
 
+    # -- removing ----------------------------------------------------------
+
+    def drop_documents(self, names: set[str], missing_ok: bool = False) -> list[str]:
+        """Take documents out of the book, by path or by file name.
+
+        Images and other files that only those documents used go with them.
+        Returns the members removed. A name the book does not have is an
+        error unless `missing_ok`.
+        """
+        doomed = [
+            item for item in self.spine
+            if item.path in names or posixpath.basename(item.path) in names
+        ]
+        found = {item.path for item in doomed} | {posixpath.basename(i.path) for i in doomed}
+        missing = sorted(names - found)
+        if missing and not missing_ok:
+            raise EpubError(f"书脊里没有这个文档：{', '.join(missing)}")
+        gone = {item.path for item in doomed}
+        # What the dropped documents point to, minus what anything else still uses.
+        orphans = self._references(gone) - gone
+        keepers = {i.path for i in self.manifest.values() if i.path not in gone}
+        text_like = {i.path for i in self.manifest.values() if i.path not in gone and (
+            i.is_content or i.media_type in ("text/css", "application/x-dtbncx+xml")
+        )}
+        orphans &= keepers
+        orphans -= self._references(text_like)
+        orphans -= {i.path for i in self.manifest.values() if "cover-image" in i.properties}
+        cover = self.opf.getroot().find(f".//{{{OPF_NS}}}meta[@name='cover']")
+        if cover is not None and cover.get("content") in self.manifest:
+            orphans.discard(self.manifest[cover.get("content")].path)
+
+        removed = gone | orphans
+        ids = {i.id for i in self.manifest.values() if i.path in removed}
+        for tag, attr in (("item", "id"), ("itemref", "idref")):
+            for el in list(self.opf.getroot().iter(f"{{{OPF_NS}}}{tag}")):
+                if el.get(attr) in ids:
+                    _remove(el)
+        for el in list(self.opf.getroot().iter(f"{{{OPF_NS}}}reference")):
+            if resolve(self.opf_path, el.get("href") or "") in removed:
+                _remove(el)
+        self.manifest = {k: v for k, v in self.manifest.items() if k not in ids}
+        self.spine = [item for item in self.spine if item.path not in removed]
+        self.removed |= removed
+        return sorted(removed)
+
+    def _references(self, members: set[str]) -> set[str]:
+        """Members of the archive that the given text files point to."""
+        found: set[str] = set()
+        for name in members:
+            if not self.has(name):
+                continue
+            text = self.read(name).decode("utf-8", "replace")
+            for ref in _REFERENCE.findall(text):
+                ref = ref[0] or ref[1]
+                if ref and "://" not in ref and not ref.startswith(("#", "data:", "mailto:")):
+                    target = resolve(name, ref)
+                    if self.has(target):
+                        found.add(target)
+        return found
+
     # -- writing -----------------------------------------------------------
 
     def write(self, out: Path, replacements: dict[str, bytes]) -> None:
@@ -211,7 +287,7 @@ class Book:
         try:
             with zipfile.ZipFile(tmp, "w") as dst:
                 for info in infos:
-                    if info.is_dir():
+                    if info.is_dir() or info.filename in self.removed:
                         continue
                     data = replacements.get(info.filename)
                     if data is None:

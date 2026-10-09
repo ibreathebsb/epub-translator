@@ -13,7 +13,7 @@ from pathlib import Path
 
 from lxml import etree
 
-from .epub import Book, EpubError, ManifestItem, serialize_xml
+from .epub import Book, EpubError, ManifestItem, _remove, resolve, serialize_xml
 from .extract import Document, ParseError, Segment
 from .providers.base import Provider, ProviderError
 from .store import Store
@@ -72,12 +72,18 @@ def translate_book(
     *,
     target: str,
     chapters: set[int] | None = None,
+    drop_classes: frozenset[str] = frozenset(),
+    drop_documents: frozenset[str] = frozenset(),
+    drop_if_present: frozenset[str] = frozenset(),
     concurrency: int = 4,
     emit: Emit | None = None,
 ) -> Report:
     """Translate `src` into `target` and write the result to `out`.
 
-    `chapters` limits the run to those spine positions (from 1). `emit` is
+    `chapters` limits the run to those spine positions (from 1). Elements
+    with one of `drop_classes` are removed from the book, untranslated, and so
+    are the documents named in `drop_documents`; those in `drop_if_present`
+    are standing settings and may be absent from this book. `emit` is
     called with progress events and may be called from worker threads.
     """
     emit = emit or _quiet
@@ -93,7 +99,12 @@ def translate_book(
         )
         store = Store(state_dir(src) / "state.db")
         try:
-            reports, jobs = _prepare(book, chapters, translator)
+            if drop_documents:
+                book.drop_documents(set(drop_documents))
+            if drop_if_present:
+                book.drop_documents(set(drop_if_present), missing_ok=True)
+            replacements: dict[str, bytes] = {}
+            reports, jobs = _prepare(book, chapters, translator, drop_classes, replacements)
             todo = _from_cache(jobs, store)
             emit(
                 "plan",
@@ -108,16 +119,16 @@ def translate_book(
                 cancel.set()
                 raise
 
-            replacements: dict[str, bytes] = {}
             memory = _harmonize(jobs, target)
             for job in jobs:
                 done = job.result.translations
-                if not done:
+                if not done and not job.doc.dropped:
                     continue
                 for seg in job.doc.segments:
                     if seg.id in done:
                         apply(seg, memory[seg.source])
-                replacements[job.item.path] = serialize_document(job.doc, target)
+                lang = target if done else None
+                replacements[job.item.path] = serialize_document(job.doc, lang)
 
             full = chapters is None
             toc = _translate_toc(book, memory, translator, store, target, full, emit)
@@ -126,6 +137,7 @@ def translate_book(
                 reports.append(toc.report)
             if full:
                 book.set_language(target)
+            if full or book.removed:
                 replacements[book.opf_path] = serialize_xml(book.opf, book.opf_data)
             book.write(out, replacements)
         finally:
@@ -138,7 +150,11 @@ def _quiet(kind: str, **data) -> None:
 
 
 def _prepare(
-    book: Book, chapters: set[int] | None, translator: Translator
+    book: Book,
+    chapters: set[int] | None,
+    translator: Translator,
+    drop_classes: frozenset[str],
+    replacements: dict[str, bytes],
 ) -> tuple[list[DocReport], list[_Job]]:
     spine = book.spine
     if chapters:
@@ -158,7 +174,7 @@ def _prepare(
         report = DocReport(index, item.path, posixpath.basename(item.path))
         reports.append(report)
         try:
-            doc = Document(book.read(item.path))
+            doc = Document(book.read(item.path), drop_classes)
         except ParseError as exc:
             report.status = "unparseable"
             report.issues.append(Issue(None, "parse", str(exc)))
@@ -167,6 +183,8 @@ def _prepare(
         report.segments = len(doc.segments)
         if not doc.segments:
             report.status = "empty"
+            if doc.dropped:
+                replacements[item.path] = serialize_document(doc)
             continue
         jobs.append(_Job(report, item, doc, translator.cache_key(doc.segments)))
     return reports, jobs
@@ -286,6 +304,37 @@ def _harmonize(jobs: list[_Job], target: str) -> dict[str, str]:
     return memory
 
 
+def _prune(root: etree._Element, base: str, removed: set[str]) -> int:
+    """Remove the table-of-contents entries that point into `removed`."""
+    count = 0
+    for el in list(root.iter()):
+        if not isinstance(el.tag, str) or not removed:
+            continue
+        ref = el.get("href") or el.get("src")
+        if not ref or "://" in ref or resolve(base, ref) not in removed:
+            continue
+        entry = el
+        while entry is not None and etree.QName(entry).localname not in ("li", "navPoint"):
+            entry = entry.getparent()
+        if entry is not None and entry.getparent() is not None:
+            _remove(entry)
+            count += 1
+    return count
+
+
+def _attached(seg: Segment) -> bool:
+    """False for a label whose entry was pruned from its tree."""
+    el = getattr(seg.loc, "parent", None)
+    if el is None:
+        el = seg.loc.element
+    top = el
+    while top.getparent() is not None:
+        top = top.getparent()
+    return top is el.getroottree().getroot() and top.tag.rpartition("}")[2] in (
+        "html", "ncx", "package"
+    )
+
+
 @dataclass
 class _Toc:
     replacements: dict[str, bytes] = field(default_factory=dict)
@@ -318,8 +367,12 @@ def _translate_toc(
             ncx = Ncx(book.read(book.ncx.path))
         except etree.XMLSyntaxError:
             pass
+    # Entries for documents that were taken out of the book go too.
+    nav_pruned = nav is not None and _prune(nav.root, book.nav.path, book.removed)
+    ncx_pruned = ncx is not None and _prune(ncx.tree.getroot(), book.ncx.path, book.removed)
     titles = title_segments(book) if full else []
     labels = (nav.segments if nav else []) + (ncx.segments if ncx else []) + titles
+    labels = [seg for seg in labels if _attached(seg)]
 
     unknown: dict[str, Segment] = {}
     for seg in labels:
@@ -357,9 +410,9 @@ def _translate_toc(
             apply(seg, memory[seg.source])
         return bool(known)
 
-    if nav is not None and fill(nav.segments):
+    if nav is not None and (fill(nav.segments) or nav_pruned):
         toc.replacements[book.nav.path] = serialize_document(nav, target if full else None)
-    if ncx is not None and fill(ncx.segments):
+    if ncx is not None and (fill(ncx.segments) or ncx_pruned):
         toc.replacements[book.ncx.path] = ncx.serialize()
     fill(titles)
     return toc

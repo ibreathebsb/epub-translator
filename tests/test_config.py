@@ -17,6 +17,8 @@ EPUBTR_MAX_OUTPUT_TOKENS=8192
 EPUBTR_TEMPERATURE=0.3
 EPUBTR_JSON_MODE=false
 EPUBTR_EXTRA={"thinking_config": {"thinking_level": "low"}}
+EPUBTR_DROP_CLASS=footer, mark
+EPUBTR_DROP_DOC=ad.xhtml
 """
 
 
@@ -54,6 +56,7 @@ def test_settings_from_file(env):
     assert s.max_output_tokens == 8192 and s.temperature == 0.3
     assert s.json_mode is False
     assert s.extra == {"thinking_config": {"thinking_level": "low"}}
+    assert s.drop_classes == {"footer", "mark"} and s.drop_docs == {"ad.xhtml"}
     assert s.source == env
 
 

@@ -127,6 +127,12 @@ def translate(
     chapters: str | None = typer.Option(
         None, "--chapters", help="只翻译这些文档，按书脊顺序从 1 编号，如 1-3,7"
     ),
+    drop_class: list[str] = typer.Option(
+        [], "--drop-class", help="删掉带这个 class 的元素，不翻译；可以写多次，与 .env 里的 EPUBTR_DROP_CLASS 合并"
+    ),
+    drop_doc: list[str] = typer.Option(
+        [], "--drop-doc", help="把这个文档从书里拿掉（写文件名），连同只有它用到的图片；可以写多次"
+    ),
     concurrency: int = typer.Option(4, "--concurrency", min=1, help="同时翻译的文档数"),
     output: Path | None = typer.Option(
         None, "-o", "--output", help="输出文件，默认是原文件旁的 <书名>.<语言>.epub"
@@ -189,7 +195,10 @@ def translate(
         with progress:
             report = translate_book(
                 book, out, provider,
-                target=to, chapters=selected, concurrency=concurrency, emit=emit,
+                target=to, chapters=selected, drop_classes=settings.drop_classes | frozenset(drop_class),
+                drop_documents=frozenset(drop_doc),
+                drop_if_present=settings.drop_docs,
+                concurrency=concurrency, emit=emit,
             )
     except KeyboardInterrupt:
         console.print("\n已中断。完成的文档已保存，重跑同一条命令会接着翻译。")

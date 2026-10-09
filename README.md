@@ -46,6 +46,8 @@ EPUBTR_API_KEY=<密钥>
 | `EPUBTR_TEMPERATURE` | 采样温度，不设则用服务端默认值 |
 | `EPUBTR_TIMEOUT` | 单次请求的超时秒数 |
 | `EPUBTR_JSON_MODE` | 是否要求服务端输出 JSON，默认 `true`。`openai` 类型的服务端拒绝这个参数时会自动关闭 |
+| `EPUBTR_DROP_CLASS` | 每次翻译都删掉带这些 class 的元素，逗号分隔。相当于默认带上 `--drop-class` |
+| `EPUBTR_DROP_DOC` | 每次翻译都拿掉这些文档（写文件名），逗号分隔。书里没有这个文档时不报错 |
 | `EPUBTR_EXTRA` | 一行 JSON，原样传给接口：`openai` 类型作为请求体的附加字段，`google` 类型作为生成配置的附加字段，`claude` 类型的每一项作为 `--名字 值` 追加到命令行 |
 
 ## 使用
@@ -63,6 +65,8 @@ epub-translate translate book.epub --to zh-CN
 | `--model` | 覆盖 `.env` 里的 `EPUBTR_MODEL` |
 | `--env-file` | 用另一个配置文件 |
 | `--chapters 1-3,7` | 只翻译这几篇文档，按书脊顺序从 1 编号。试译时用 |
+| `--drop-class 名字` | 删掉带这个 class 的元素，不翻译。用来去掉下载站加的页脚之类；可以写多次 |
+| `--drop-doc 文件名` | 把这个文档从书里拿掉，连同只有它用到的图片。用来去掉广告页；可以写多次。之后 `--chapters` 的编号按拿掉后的顺序算 |
 | `--concurrency` | 同时翻译的文档数，默认 4 |
 | `-o` | 输出文件路径 |
 

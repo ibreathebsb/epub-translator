@@ -76,6 +76,18 @@ def test_report_merges_runs_of_segments(setup):
     assert "补 4 段（输出被截断）" in result.output
 
 
+def test_standing_drops_from_the_env_file(setup, tmp_path):
+    epub, provider = setup
+    with (tmp_path / ".env").open("a") as f:
+        f.write("EPUBTR_DROP_CLASS=gone\nEPUBTR_DROP_DOC=notes.xhtml,not-in-this-book.xhtml\n")
+    result = runner.invoke(cli.app, ["translate", str(epub)])
+    assert result.exit_code == 0, result.output
+    with zipfile.ZipFile(epub.with_name("book.zh-CN.epub")) as z:
+        assert "OEBPS/notes.xhtml" not in z.namelist()
+        assert "notes.xhtml" not in z.read("OEBPS/nav.xhtml").decode()
+        assert "notes.xhtml" not in z.read("OEBPS/toc.ncx").decode()
+
+
 def test_missing_config(epub, tmp_path):
     result = runner.invoke(cli.app, ["translate", str(epub), "--env-file", str(tmp_path / "nope.env")])
     assert result.exit_code == 2 and "找不到配置文件" in result.output

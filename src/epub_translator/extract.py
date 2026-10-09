@@ -238,10 +238,11 @@ def _no_translate(el: etree._Element) -> bool:
 class Document:
     """A parsed content document and its translatable segments."""
 
-    def __init__(self, data: bytes):
+    def __init__(self, data: bytes, drop_classes: frozenset[str] = frozenset()):
         self.original = data
         self.tree = parse_xhtml(data)
         self.root = self.tree.getroot()
+        self.dropped = self._drop(drop_classes) if drop_classes else 0
         # Pin every node: lxml would otherwise hand out fresh proxy objects and
         # the element references kept in segments would lose their identity.
         self._nodes = list(self.root.iter())
@@ -249,6 +250,28 @@ class Document:
         self._heading = False
         self.segments: list[Segment] = []
         self._extract()
+
+    def _drop(self, classes: frozenset[str]) -> int:
+        """Remove every element that has one of `classes`; the text after it stays."""
+        doomed = [
+            el for el in self.root.iter()
+            if isinstance(el.tag, str) and classes & set((el.get("class") or "").split())
+        ]
+        count = 0
+        for el in doomed:
+            parent = el.getparent()
+            if parent is None:
+                continue  # the root, or already gone with an ancestor
+            tail = el.tail or ""
+            if tail:
+                before = el.getprevious()
+                if before is not None:
+                    before.tail = (before.tail or "") + tail
+                else:
+                    parent.text = (parent.text or "") + tail
+            parent.remove(el)
+            count += 1
+        return count
 
     @property
     def title(self) -> str | None:
